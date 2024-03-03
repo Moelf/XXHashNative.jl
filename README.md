@@ -1,6 +1,7 @@
-# XXHashNative
+# XXHashNative.jl
 
 [![Build Status](https://github.com/Moelf/XXHashNative.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/Moelf/XXHashNative.jl/actions/workflows/CI.yml?query=branch%3Amain)
+[![Codecov](https://codecov.io/gh/Moelf/XXHashNative.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/Moelf/XXHashNative.jl)
 
 This package provides native Julia implementations for some of the
 [XXHash](https://github.com/Cyan4973/xxHash/) algorithms. Currently, only
