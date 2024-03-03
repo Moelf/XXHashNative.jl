@@ -39,17 +39,17 @@ const _SECRET_CONSUME_RATE = 8
 const _STRIPE_LEN = 64
 
 function ifb32(bytes, offset=0)
-    reinterpret(UInt32, bytes[offset:offset+3]) |> only
+    reinterpret(UInt32, @view bytes[offset:offset+3]) |> only
 end
 function ifb64(bytes, offset=0)
-    reinterpret(UInt64, bytes[offset:offset+7]) |> only
+    reinterpret(UInt64, @view bytes[offset:offset+7]) |> only
 end
 
-mutable struct XXHash64
-    input
-    inputLength
-    seed
-    secret
+struct XXHash64{T, S}
+    input::T
+    inputLength::UInt64
+    seed::UInt64
+    secret::S
 end
 
 function _avalanche(h)
@@ -65,39 +65,39 @@ function _avalanche64(h)
 end
 
 function XXH3_64_empty(self)
-    # Used by intdigest() if 0 bytes have been added
     return _avalanche64(
         self.seed ⊻ ifb64(self.secret, 56+1) ⊻ ifb64(self.secret, 64+1)
     )
 end
 
 function XXH3_64_1to3(self)
-    # Used by intdigest() if 1-3 bytes have been added
-    L = self.inputLength
-    b1 = UInt32(self.input[end])
-    b2 = UInt32(L) << 8
-    b3 = UInt32(self.input[begin]) << 16
-    b4 = UInt32(self.input[self.inputLength>>1+1]) << 24
+    (;input, inputLength, secret, seed) = self
+
+    b1 = UInt32(input[end])
+    b2 = UInt32(inputLength) << 8
+    b3 = UInt32(input[begin]) << 16
+    b4 = UInt32(input[inputLength>>1+1]) << 24
     combined = b1 | b2 | b3 | b4
-    i1 = UInt64(ifb32(self.secret, 1) ⊻ ifb32(self.secret, 4+1)) + self.seed
+    i1 = UInt64(ifb32(secret, 1) ⊻ ifb32(secret, 4+1)) + seed
     value = i1 ⊻ combined
     return _avalanche64(value)
 end
 
 function XXH3_64_4to8(self)
-    # Used by intdigest() if 1-3 bytes have been added
-    inputFirst = ifb32(self.input, 1)
-    inputLast = ifb32(self.input, self.inputLength - 4+1)
+    (;input, inputLength, secret, seed) = self
 
-    i1 = UInt64(bswap(UInt32(self.seed >> 32))) << 32
-    modifiedSeed = self.seed ⊻ i1
-    secretWords = reinterpret(UInt64, self.secret[8+1:23+1])
+    inputFirst = ifb32(input, 1)
+    inputLast = ifb32(input, inputLength - 4+1)
+
+    i1 = UInt64(bswap(UInt32(seed >> 32))) << 32
+    modifiedSeed = seed ⊻ i1
+    secretWords = reinterpret(UInt64, @view secret[8+1:24])
     combined = UInt64(inputLast) | (UInt64(inputFirst) << 32)
 
     value = ((secretWords[1] ⊻ secretWords[2]) - modifiedSeed) ⊻ combined
     value ⊻= ((value << 49) | (value >> 15)) ⊻ ((value << 24) | (value >> 40))
     value = value * PRIME_MX2
-    value = value ⊻ ((value >> 35) + self.inputLength)
+    value = value ⊻ ((value >> 35) + inputLength)
     value = value * PRIME_MX2
     value = value ⊻ (value >> 28)
 
@@ -106,24 +106,25 @@ end
 
 
 function XXH3_64_9to16(self)
-    # Used by intdigest() if 1-3 bytes have been added
-    inputFirst = ifb64(self.input, 1)
-    inputLast = ifb64(self.input, self.inputLength - 8+1)
+    (;input, inputLength, secret, seed) = self
 
-    secretWords = reinterpret(UInt64, self.secret[24+1:55+1])
-    low = ((secretWords[1] ⊻ secretWords[2]) + self.seed) ⊻ inputFirst
-    high = ((secretWords[3] ⊻ secretWords[4]) - self.seed) ⊻ inputLast
+    inputFirst = ifb64(input, 1)
+    inputLast = ifb64(input, inputLength - 8+1)
+
+    secretWords = reinterpret(UInt64, @view secret[24+1:56])
+    low = ((secretWords[1] ⊻ secretWords[2]) + seed) ⊻ inputFirst
+    high = ((secretWords[3] ⊻ secretWords[4]) - seed) ⊻ inputLast
 
     mulResult = UInt128(low) * UInt128(high)
     lowerhalf, higherhalf = reinterpret(NTuple{2,UInt64}, mulResult)
-    value = self.inputLength + bswap(low) + high + (lowerhalf ⊻ higherhalf)
+    value = inputLength + bswap(low) + high + (lowerhalf ⊻ higherhalf)
 
     return _avalanche(value)
 end
 
 function mixStep(data, secret, secretOffset, seed)
     dataWords = reinterpret(UInt64, data)
-    secretWords = reinterpret(UInt64, secret[secretOffset+1:secretOffset+15+1])
+    secretWords = reinterpret(UInt64, @view secret[secretOffset+1:secretOffset+16])
 
     mulResult = UInt128(dataWords[1] ⊻ (secretWords[1] + seed)) *
                 UInt128(dataWords[2] ⊻ (secretWords[2] - seed))
@@ -132,43 +133,41 @@ function mixStep(data, secret, secretOffset, seed)
 
 end
 function XXH3_64_17to128(self)
-    acc = UInt64(self.inputLength) * PRIME64_1
-    numRounds = ((self.inputLength - 1) >> 5) + 1
+    (;input, inputLength, secret, seed) = self
+
+    acc = UInt64(inputLength) * PRIME64_1
+    numRounds = ((inputLength - 1) >> 5) + 1
+    # need signed to break the while loop
     i = Int(numRounds - 1)
-    seed = self.seed
-    input = self.input
-    secret = self.secret
     while i >= 0
         offsetStart = i * 16
-        offsetEnd = self.inputLength - i * 16 - 16
-        acc += mixStep(input[offsetStart+1:offsetStart+15+1], secret, i * 32, seed)
-        acc += mixStep(input[offsetEnd+1:offsetEnd+15+1], secret, i * 32 + 16, seed)
+        offsetEnd = inputLength - i * 16 - 16
+        acc += mixStep(input[offsetStart+1:offsetStart+16], secret, i * 32, seed)
+        acc += mixStep(input[offsetEnd+1:offsetEnd+16], secret, i * 32 + 16, seed)
         i -= 1
     end
     return _avalanche(acc)
 end
 
 function XXH3_64_129to240(self)
-    inputLength = self.inputLength
+    (;input, inputLength, secret, seed) = self
+
     acc = UInt64(inputLength) * PRIME64_1
     numChunks = inputLength >> 4
-    secret = self.secret
-    seed = self.seed
-    input = self.input
     for i in 0:7
-        acc += mixStep(input[i*16+1:i*16+16-1+1], secret, i * 16, seed)
+        acc += mixStep(input[i*16+1:i*16+16], secret, i * 16, seed)
     end
     acc = _avalanche(acc)
     for i in 8:numChunks-1
-        acc += mixStep(input[i*16+1:i*16+16-1+1], secret, (i - 8) * 16 + 3, seed)
+        acc += mixStep(input[i*16+1:i*16+16], secret, (i - 8) * 16 + 3, seed)
     end
-    acc += mixStep(input[inputLength-16+1:inputLength-1+1], secret, 119, seed)
+    acc += mixStep(input[inputLength-16+1:inputLength], secret, 119, seed)
     return _avalanche(acc)
 end
 
 
 function accumulate!(acc, stripe, secret, secretOffset)
-    secretWords = reinterpret(UInt64, @view secret[secretOffset+1:secretOffset+64-1+1])
+    secretWords = reinterpret(UInt64, @view secret[secretOffset+1:secretOffset+64])
     for i = 0:7
         value = stripe[i+1] ⊻ secretWords[i+1]
         acc[i⊻1+1] = acc[i⊻1+1] + stripe[i+1]
@@ -189,19 +188,19 @@ function scramble!(acc, secret)
 end
 
 function XXH3_64_large(self)
+    (;input, inputLength, secret) = self
     acc = @MVector[PRIME32_3, PRIME64_1, PRIME64_2, PRIME64_3,
             PRIME64_4, PRIME32_2, PRIME64_5, PRIME32_1]
-    secretLength = length(self.secret)
+    secretLength = length(secret)
     stripesPerBlock = (secretLength - 64) ÷ 8
     blockSize = 64 * stripesPerBlock
-    secret = self.secret
 
 
-    blocks = collect(Iterators.partition(self.input, blockSize))
+    blocks = collect(Iterators.partition(input, blockSize))
     local last_stripe
     for block in @view blocks[begin:end-1]
         for n = 0:stripesPerBlock-1
-            last_stripe = block[n*64+1:n*64+64-1+1]
+            last_stripe = @view block[n*64+1:n*64+64]
             stripe = reinterpret(UInt64, last_stripe)
             accumulate!(acc, stripe, secret, n * 8)
         end
@@ -213,19 +212,19 @@ function XXH3_64_large(self)
     len = length(block)
     nFullStripes = (len - 1) ÷ 64
     for n in 0:nFullStripes-1
-        _stripe = block[n*64+1:n*64+64-1+1]
+        _stripe = @view block[n*64+1:n*64+64]
         stripe = reinterpret(UInt64, _stripe)
         accumulate!(acc, stripe, secret, n * 8)
     end
     buf_end = last(vcat(last_stripe, block), 64)
 
-    buf_end = reinterpret(UInt64, last(self.input, 64))
+    buf_end = reinterpret(UInt64, @view input[end-63:end])
     accumulate!(acc, buf_end, secret, secretLength - 71)
-    return finalMerge(acc, length(self.input) * PRIME64_1, secret, 11)
+    return finalMerge(acc, inputLength * PRIME64_1, secret, 11)
 end
 
 function finalMerge(acc, initValue, secret, secretOffset)
-    secretWords = reinterpret(UInt64, @view secret[secretOffset+1:secretOffset+64-1+1])
+    secretWords = reinterpret(UInt64, @view secret[secretOffset+1:secretOffset+64])
     result = initValue
     for i in 0:3
         mulResult = UInt128(acc[i*2+1] ⊻ secretWords[i*2+1]) *
@@ -238,9 +237,7 @@ end
 
 
 function XXHash64(input::AbstractVector{UInt8}, seed=UInt64(0), secret=_ksecret)
-
     return XXHash64(input, UInt64(length(input)), seed, secret)
-    error()
 end
 
 end
