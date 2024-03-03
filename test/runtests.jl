@@ -16,4 +16,5 @@ using XXHashNative: XXH3_64_empty, XXH3_64_1to3, XXH3_64_4to8, XXH3_64_9to16, XX
     @test XXHash64(a) |> XXH3_64_129to240 == 0x025ea73bba62f1fc
     a = repeat(a, 8)
     @test XXHash64(a) |> XXH3_64_large == 0xb56d7f174146570c
+    @show @allocated XXHash64(a) |> XXH3_64_large
 end
