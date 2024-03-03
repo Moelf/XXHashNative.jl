@@ -1,7 +1,7 @@
 # XXHashNative.jl
 
 [![Build Status](https://github.com/Moelf/XXHashNative.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/Moelf/XXHashNative.jl/actions/workflows/CI.yml?query=branch%3Amain)
-[![Codecov](https://codecov.io/gh/Moelf/XXHashNative.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/Moelf/XXHashNative.jl)
+[![codecov](https://codecov.io/gh/Moelf/XXHashNative.jl/graph/badge.svg?token=QnyBYvkeRN)](https://codecov.io/gh/Moelf/XXHashNative.jl)
 
 For a wrapper package, see [XXhash.jl](https://github.com/hros/XXhash.jl).
 
