@@ -3,6 +3,10 @@ uuid = "e5d8e439-e7fa-4681-9c12-1c64bda517be"
 authors = ["Moelf <proton@jling.dev> and contributors"]
 version = "1.0.0-DEV"
 
+[deps]
+OffsetArrays = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
 [compat]
 julia = "1"
 
