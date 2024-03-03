@@ -45,6 +45,18 @@ function ifb64(bytes, offset=0)
     reinterpret(UInt64, @view bytes[offset:offset+7]) |> only
 end
 
+function lowerhigher(x::UInt128)
+    hi = (x >> 64) % UInt64
+    lo = x % UInt64
+    return (lo, hi)
+end
+
+function lowerhigher(x::UInt64)
+    hi = (x >> 32) % UInt32
+    lo = x % UInt32
+    return (lo, hi)
+end
+
 struct XXHash64{T, S}
     input::T
     inputLength::UInt64
@@ -116,7 +128,7 @@ function XXH3_64_9to16(self)
     high = ((secretWords[3] ⊻ secretWords[4]) - seed) ⊻ inputLast
 
     mulResult = UInt128(low) * UInt128(high)
-    lowerhalf, higherhalf = reinterpret(NTuple{2,UInt64}, mulResult)
+    lowerhalf, higherhalf = lowerhigher(mulResult)
     value = inputLength + bswap(low) + high + (lowerhalf ⊻ higherhalf)
 
     return _avalanche(value)
@@ -128,7 +140,7 @@ function mixStep(data, secret, secretOffset, seed)
 
     mulResult = UInt128(dataWords[1] ⊻ (secretWords[1] + seed)) *
                 UInt128(dataWords[2] ⊻ (secretWords[2] - seed))
-    lowerhalf, higherhalf = reinterpret(NTuple{2,UInt64}, mulResult)
+    lowerhalf, higherhalf = lowerhigher(mulResult)
     return lowerhalf ⊻ higherhalf
 
 end
@@ -169,9 +181,9 @@ end
 function accumulate!(acc, stripe, secret, secretOffset)
     secretWords = reinterpret(UInt64, @view secret[secretOffset+1:secretOffset+64])
     for i = 0:7
-        value = stripe[i+1] ⊻ secretWords[i+1]
+        value::UInt64 = stripe[i+1] ⊻ secretWords[i+1]
         acc[i⊻1+1] = acc[i⊻1+1] + stripe[i+1]
-        lowerhalf, higherhalf = reinterpret(NTuple{2,UInt32}, value)
+        lowerhalf, higherhalf = lowerhigher(value)
         acc[i+1] = acc[i+1] + UInt64(lowerhalf) * UInt64(higherhalf)
     end
     return acc
@@ -229,7 +241,7 @@ function finalMerge(acc, initValue, secret, secretOffset)
     for i in 0:3
         mulResult = UInt128(acc[i*2+1] ⊻ secretWords[i*2+1]) *
                     UInt128(acc[i*2+1+1] ⊻ secretWords[i*2+1+1])
-        lowerhalf, higherhalf = reinterpret(NTuple{2,UInt64}, mulResult)
+        lowerhalf, higherhalf = lowerhigher(mulResult)
         result = result + (lowerhalf ⊻ higherhalf)
     end
     return _avalanche(result)
