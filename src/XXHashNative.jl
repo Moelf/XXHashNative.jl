@@ -167,8 +167,8 @@ end
 
 function accumulate!(acc, stripe, secret, secretOffset)
     secretWords = reinterpret(UInt64, @view secret[secretOffset+1:secretOffset+64])
-    for i = 0:7
-        value::UInt64 = stripe[i+1] ⊻ secretWords[i+1]
+    @inbounds for i = 0:7
+        value = stripe[i+1] ⊻ secretWords[i+1]
         acc[i⊻1+1] = acc[i⊻1+1] + stripe[i+1]
         lowerhalf, higherhalf = lowerhigher(value)
         acc[i+1] = acc[i+1] + UInt64(lowerhalf) * UInt64(higherhalf)

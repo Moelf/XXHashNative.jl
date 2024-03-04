@@ -34,7 +34,7 @@ julia> xxh3_64("Hello, world!")
 
 ## Benchmark
 
-Note: not particularly fast
+Note: not particularly fast but fast enough
 
 ```julia
 julia> using XXHashNative: xxh3_64
@@ -42,21 +42,21 @@ julia> using XXHashNative: xxh3_64
 julia> using BenchmarkTools
 
 julia> @benchmark xxh3_64(x) setup=(x=rand(UInt8, 2^20))
-BenchmarkTools.Trial: 1779 samples with 1 evaluation.
- Range (min … max):  2.686 ms …  3.352 ms  ┊ GC (min … max): 0.00% … 0.00%
- Time  (median):     2.695 ms              ┊ GC (median):    0.00%
- Time  (mean ± σ):   2.709 ms ± 43.377 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
+BenchmarkTools.Trial: 10000 samples with 1 evaluation.
+ Range (min … max):  159.330 μs … 260.553 μs  ┊ GC (min … max): 0.00% … 0.00%
+ Time  (median):     165.581 μs               ┊ GC (median):    0.00%
+ Time  (mean ± σ):   167.285 μs ±   6.255 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
 
-  ▂▇█▆▃▂▃▃▃▃▂▁▁▁   ▁   ▁
-  ██████████████▇█▇█▇▇▇█▇▆▆▆▆▆▇▆▄▆▅▆▆▁▇▇█▆▁▅▅▁▆▅▄▅▄▄▁▁▁▁▁▁▁▄ █
-  2.69 ms      Histogram: log(frequency) by time     2.86 ms <
+      ▆█▇█▇▇▃▁▂▁
+  ▁▁▄███████████████▇▇▇▇▆▅▄▄▄▄▃▃▃▂▂▂▂▂▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁ ▃
+  159 μs           Histogram: frequency by time          191 μs <
 
  Memory estimate: 80 bytes, allocs estimate: 1.
 
-julia> 1/2.686*1000
-372.3#MB/s
+julia> 1/0.159*1000
+6289.30#MB/s
 
-# for comparison, the wrapper XXhash.jl is 65 times faster
+# for comparison, the wrapper XXhash.jl is 4 times faster
 julia> 1/40.725*10^6
 24554.94#MB/s
 ```
