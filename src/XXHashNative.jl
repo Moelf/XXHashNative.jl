@@ -166,7 +166,7 @@ end
 
 
 function accumulate!(acc, stripe, secret, secretOffset)
-    secretWords = reinterpret(UInt64, @view secret[secretOffset+1:secretOffset+64])
+    secretWords = @inbounds reinterpret(UInt64, @view secret[secretOffset+1:secretOffset+64])
     @inbounds for i = 0:7
         value = stripe[i+1] ⊻ secretWords[i+1]
         acc[i⊻1+1] = acc[i⊻1+1] + stripe[i+1]
@@ -178,7 +178,7 @@ end
 
 function round_scramble!(acc, secret)
     secretWords = reinterpret(UInt64, @view secret[end-63:end])
-    for i = 1:8
+    @inbounds for i = 1:8
         acc[i] = acc[i] ⊻ (acc[i] >> 47)
         acc[i] = acc[i] ⊻ secretWords[i]
         acc[i] = acc[i] * PRIME32_1
@@ -187,7 +187,7 @@ function round_scramble!(acc, secret)
 end
 
 function round_accumulate!(acc, block, secret, N)
-    for n = 0:N-1
+    @inbounds for n = 0:N-1
         _stripe = @view block[n*64+1:n*64+64]
         stripe = reinterpret(UInt64, _stripe)
         accumulate!(acc, stripe, secret, n * 8)

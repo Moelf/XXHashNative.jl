@@ -43,20 +43,20 @@ julia> using BenchmarkTools
 
 julia> @benchmark xxh3_64(x) setup=(x=rand(UInt8, 2^20))
 BenchmarkTools.Trial: 10000 samples with 1 evaluation.
- Range (min … max):  159.330 μs … 260.553 μs  ┊ GC (min … max): 0.00% … 0.00%
- Time  (median):     165.581 μs               ┊ GC (median):    0.00%
- Time  (mean ± σ):   167.285 μs ±   6.255 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
+ Range (min … max):  126.968 μs … 371.351 μs  ┊ GC (min … max): 0.00% … 0.00%
+ Time  (median):     132.413 μs               ┊ GC (median):    0.00%
+ Time  (mean ± σ):   138.741 μs ±  21.616 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
 
-      ▆█▇█▇▇▃▁▂▁
-  ▁▁▄███████████████▇▇▇▇▆▅▄▄▄▄▃▃▃▂▂▂▂▂▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁ ▃
-  159 μs           Histogram: frequency by time          191 μs <
+  ▅█▇▆▆▅▅▄▃▃▃▂▁▁▁▁▁ ▁                                           ▂
+  █████████████████████▇▇▇▇▆▆▆▆▆▆▆▅▅▆▄▆▄▄▅▄▄▅▃▄▃▄▁▃▃▅▁▆▅▆▇███▇▇ █
+  127 μs        Histogram: log(frequency) by time        247 μs <
 
  Memory estimate: 80 bytes, allocs estimate: 1.
 
-julia> 1/0.159*1000
-6289.30#MB/s
+julia> 1/126*10^6
+7936.50#MB/s
 
-# for comparison, the wrapper XXhash.jl is 4 times faster
+# for comparison, the wrapper XXhash.jl is 3 times faster
 julia> 1/40.725*10^6
 24554.94#MB/s
 ```
