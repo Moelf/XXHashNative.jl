@@ -37,6 +37,7 @@ using XXHashNative:
 
     a = repeat("abcd", 300)
     @test xxh3_64(a) == 0x33b975506e1b8a19
+    @test xxh3_64(@view a[begin+4:1024+4]) == 0xf90ef01af71cb18e
 
     # when input exactly 2048 long
     a = repeat("abcd", 512)

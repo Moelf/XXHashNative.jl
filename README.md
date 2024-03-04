@@ -31,3 +31,32 @@ julia> xxh3_64(codeunits("Hello, world!"))
 julia> xxh3_64("Hello, world!")
 0xf3c34bf11915e869
 ```
+
+## Benchmark
+
+Note: not particularly fast
+
+```julia
+julia> using XXHashNative: xxh3_64
+
+julia> using BenchmarkTools
+
+julia> @benchmark xxh3_64(x) setup=(x=rand(UInt8, 2^20))
+BenchmarkTools.Trial: 1779 samples with 1 evaluation.
+ Range (min … max):  2.686 ms …  3.352 ms  ┊ GC (min … max): 0.00% … 0.00%
+ Time  (median):     2.695 ms              ┊ GC (median):    0.00%
+ Time  (mean ± σ):   2.709 ms ± 43.377 μs  ┊ GC (mean ± σ):  0.00% ± 0.00%
+
+  ▂▇█▆▃▂▃▃▃▃▂▁▁▁   ▁   ▁
+  ██████████████▇█▇█▇▇▇█▇▆▆▆▆▆▇▆▄▆▅▆▆▁▇▇█▆▁▅▅▁▆▅▄▅▄▄▁▁▁▁▁▁▁▄ █
+  2.69 ms      Histogram: log(frequency) by time     2.86 ms <
+
+ Memory estimate: 80 bytes, allocs estimate: 1.
+
+julia> 1/2.686*1000
+372.3#MB/s
+
+# for comparison, the wrapper XXhash.jl is 65 times faster
+julia> 1/40.725*10^6
+24554.94#MB/s
+```

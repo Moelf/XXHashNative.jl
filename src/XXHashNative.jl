@@ -187,13 +187,12 @@ function round_scramble!(acc, secret)
 end
 
 function round_accumulate!(acc, block, secret, N)
-    local last_stripe
     for n = 0:N-1
-        last_stripe = @view block[n*64+1:n*64+64]
-        stripe = reinterpret(UInt64, last_stripe)
+        _stripe = @view block[n*64+1:n*64+64]
+        stripe = reinterpret(UInt64, _stripe)
         accumulate!(acc, stripe, secret, n * 8)
     end
-    return last_stripe
+    return acc
 end
 
 function XXH3_64_large(self)
@@ -212,19 +211,19 @@ function XXH3_64_large(self)
     stripesPerBlock = (secretLength - 64) ÷ 8
     blockSize = 64 * stripesPerBlock
 
-    blocks = collect(Iterators.partition(input, blockSize))
+    i = 1
     # all rounds except last one
-    for block in @view blocks[begin:end-1]
-        round_accumulate!(acc, block, secret, stripesPerBlock)
+    while i <= inputLength - blockSize
+        round_accumulate!(acc, @view(input[i:i+blockSize-1]), secret, stripesPerBlock)
         round_scramble!(acc, secret)
+        i += blockSize
     end
 
     # last round
-    block = last(blocks)
-    len = length(block)
+    last_block = @view input[i:end]
+    len = inputLength - i
     nFullStripes = (len - 1) ÷ 64
-    last_stripe = round_accumulate!(acc, block, secret, nFullStripes)
-    buf_end = last(vcat(last_stripe, block), 64)
+    round_accumulate!(acc, last_block, secret, nFullStripes)
 
     buf_end = reinterpret(UInt64, @view input[end-63:end])
     accumulate!(acc, buf_end, secret, secretLength - 71)
@@ -246,13 +245,13 @@ end
 
 struct XXHash64{T,S}
     input::T
-    inputLength::UInt64
+    inputLength::Int64
     seed::UInt64
     secret::S
 end
 
 function XXHash64(input::AbstractVector{UInt8}, seed = UInt64(0), secret = _ksecret)
-    return XXHash64(input, UInt64(length(input)), seed, secret)
+    return XXHash64(input, length(input), seed, secret)
 end
 
 """
@@ -260,7 +259,7 @@ end
 """
 function xxh3_64(input::AbstractVector{UInt8}, seed = UInt64(0), secret = _ksecret)
     Base.require_one_based_indexing(input, secret)
-    inputLength = UInt64(length(input))
+    inputLength = length(input)
     h64 = XXHash64(input, inputLength, seed, secret)
     if iszero(inputLength)
         return XXH3_64_empty(h64)
