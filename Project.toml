@@ -1,7 +1,7 @@
 name = "XXHashNative"
 uuid = "e5d8e439-e7fa-4681-9c12-1c64bda517be"
 authors = ["Moelf <proton@jling.dev> and contributors"]
-version = "1.0.0"
+version = "1.0.1"
 
 [deps]
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
