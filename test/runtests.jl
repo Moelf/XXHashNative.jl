@@ -25,7 +25,6 @@ using XXHashNative:
     @test XXHash64(a) |> XXH3_64_129to240 == 0x025ea73bba62f1fc == xxh3_64(a)
     a = repeat(a, 8)
     @test XXHash64(a) |> XXH3_64_large == 0xb56d7f174146570c == xxh3_64(a)
-    @show @allocated XXHash64(a) |> XXH3_64_large
 
     # when input smaller than 1024
     a = repeat("abcd", 100)

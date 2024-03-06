@@ -1,6 +1,6 @@
 module XXHashNative
 # Julia re-write
-using StaticArrays: @MVector, @SVector
+using StaticArrays: @MVector, @SVector, SVector
 
 const PRIME32_1 = 0x9E3779B1
 const PRIME32_2 = 0x85EBCA77
@@ -65,7 +65,8 @@ function _avalanche64(h::UInt64)
 end
 
 function XXH3_64_empty(self)
-    return _avalanche64(self.seed ⊻ ifb64(self.secret, 56 + 1) ⊻ ifb64(self.secret, 64 + 1))
+    (; seed, secret) = self
+    return _avalanche64(seed ⊻ ifb64(secret, 56 + 1) ⊻ ifb64(secret, 64 + 1))
 end
 
 function XXH3_64_1to3(self)
@@ -87,9 +88,9 @@ function XXH3_64_4to8(self)
     inputFirst = ifb32(input, 1)
     inputLast = ifb32(input, inputLength - 4 + 1)
 
-    i1 = UInt64(bswap(UInt32(seed >> 32))) << 32
-    modifiedSeed = seed ⊻ i1
-    secretWords = reinterpret(UInt64, @view secret[8+1:24])
+    lowerhalf, _ = lowerhigher(seed)
+    modifiedSeed = seed ⊻ lowerhalf
+    secretWords = SVector{2, UInt64}(reinterpret(UInt64, @view secret[8+1:24]))
     combined = UInt64(inputLast) | (UInt64(inputFirst) << 32)
 
     value = ((secretWords[1] ⊻ secretWords[2]) - modifiedSeed) ⊻ combined
@@ -109,7 +110,7 @@ function XXH3_64_9to16(self)
     inputFirst = ifb64(input, 1)
     inputLast = ifb64(input, inputLength - 8 + 1)
 
-    secretWords = reinterpret(UInt64, @view secret[24+1:56])
+    secretWords = SVector{4, UInt64}(reinterpret(UInt64, @view secret[24+1:56]))
     low = ((secretWords[1] ⊻ secretWords[2]) + seed) ⊻ inputFirst
     high = ((secretWords[3] ⊻ secretWords[4]) - seed) ⊻ inputLast
 
@@ -135,15 +136,13 @@ function XXH3_64_17to128(self)
     (; input, inputLength, secret, seed) = self
 
     acc = UInt64(inputLength) * PRIME64_1
-    numRounds = ((inputLength - 1) >> 5) + 1
+    numRounds = ((inputLength - 1) >> 5)
     # need signed to break the while loop
-    i = Int(numRounds - 1)
-    while i >= 0
+    @views for i in numRounds:-1:0
         offsetStart = i * 16
         offsetEnd = inputLength - i * 16 - 16
         acc += mixStep(input[offsetStart+1:offsetStart+16], secret, i * 32, seed)
         acc += mixStep(input[offsetEnd+1:offsetEnd+16], secret, i * 32 + 16, seed)
-        i -= 1
     end
     return _avalanche(acc)
 end
@@ -154,13 +153,13 @@ function XXH3_64_129to240(self)
     acc = UInt64(inputLength) * PRIME64_1
     numChunks = inputLength >> 4
     for i = 0:7
-        acc += mixStep(input[i*16+1:i*16+16], secret, i * 16, seed)
+        acc += @views mixStep(input[i*16+1:i*16+16], secret, i * 16, seed)
     end
     acc = _avalanche(acc)
     for i = 8:numChunks-1
-        acc += mixStep(input[i*16+1:i*16+16], secret, (i - 8) * 16 + 3, seed)
+        acc += @views mixStep(input[i*16+1:i*16+16], secret, (i - 8) * 16 + 3, seed)
     end
-    acc += mixStep(input[inputLength-16+1:inputLength], secret, 119, seed)
+    acc += @views mixStep(input[inputLength-16+1:inputLength], secret, 119, seed)
     return _avalanche(acc)
 end
 
