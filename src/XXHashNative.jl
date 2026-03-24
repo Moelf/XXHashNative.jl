@@ -280,4 +280,149 @@ end
 xxh3_64(input::AbstractString, seed = UInt64(0), secret = _ksecret) =
     xxh3_64(codeunits(input), seed, secret)
 
+# XXH64 implementation
+
+function rotl(x::UInt64, r::Int)
+    return (x << r) | (x >> (64 - r))
+end
+
+function xxh64_round(acc::UInt64, input::UInt64)
+    acc += input * PRIME64_2
+    acc = rotl(acc, 31)
+    acc *= PRIME64_1
+    return acc
+end
+
+function xxh64_merge_round(acc::UInt64, val::UInt64)
+    val = xxh64_round(UInt64(0), val)
+    acc ⊻= val
+    acc = acc * PRIME64_1 + PRIME64_4
+    return acc
+end
+
+function xxh64_avalanche(h64::UInt64)
+    h64 ⊻= h64 >> 33
+    h64 *= PRIME64_2
+    h64 ⊻= h64 >> 29
+    h64 *= PRIME64_3
+    h64 ⊻= h64 >> 32
+    return h64
+end
+
+mutable struct XXH64State
+    v1::UInt64
+    v2::UInt64
+    v3::UInt64
+    v4::UInt64
+    total_len::UInt64
+    buffer::Vector{UInt8}
+    buffer_len::Int
+    seed::UInt64
+end
+
+function XXH64State(seed::UInt64 = UInt64(0))
+    v1 = seed + PRIME64_1 + PRIME64_2
+    v2 = seed + PRIME64_2
+    v3 = seed
+    v4 = seed - PRIME64_1
+    return XXH64State(v1, v2, v3, v4, 0, zeros(UInt8, 32), 0, seed)
+end
+
+function update!(state::XXH64State, input::AbstractVector{UInt8})
+    input_len = length(input)
+    state.total_len += input_len
+    input_pos = 1
+
+    if state.buffer_len + input_len < 32
+        # Fill buffer and return
+        copyto!(state.buffer, state.buffer_len + 1, input, 1, input_len)
+        state.buffer_len += input_len
+        return state
+    end
+
+    # Fill remaining buffer to 32 bytes
+    if state.buffer_len > 0
+        fill_len = 32 - state.buffer_len
+        copyto!(state.buffer, state.buffer_len + 1, input, 1, fill_len)
+
+        state.v1 = xxh64_round(state.v1, ifb64(state.buffer, 1))
+        state.v2 = xxh64_round(state.v2, ifb64(state.buffer, 9))
+        state.v3 = xxh64_round(state.v3, ifb64(state.buffer, 17))
+        state.v4 = xxh64_round(state.v4, ifb64(state.buffer, 25))
+
+        input_pos += fill_len
+        state.buffer_len = 0
+    end
+
+    # Process 32-byte blocks
+    while input_pos <= input_len - 31
+        state.v1 = xxh64_round(state.v1, ifb64(input, input_pos))
+        state.v2 = xxh64_round(state.v2, ifb64(input, input_pos + 8))
+        state.v3 = xxh64_round(state.v3, ifb64(input, input_pos + 16))
+        state.v4 = xxh64_round(state.v4, ifb64(input, input_pos + 24))
+        input_pos += 32
+    end
+
+    # Buffer remaining data
+    rem_len = input_len - input_pos + 1
+    if rem_len > 0
+        copyto!(state.buffer, 1, input, input_pos, rem_len)
+        state.buffer_len = rem_len
+    end
+
+    return state
+end
+
+update!(state::XXH64State, input::AbstractString) = update!(state, codeunits(input))
+
+function digest!(state::XXH64State)
+    h64 = UInt64(0)
+    if state.total_len >= 32
+        h64 = rotl(state.v1, 1) + rotl(state.v2, 7) + rotl(state.v3, 12) + rotl(state.v4, 18)
+        h64 = xxh64_merge_round(h64, state.v1)
+        h64 = xxh64_merge_round(h64, state.v2)
+        h64 = xxh64_merge_round(h64, state.v3)
+        h64 = xxh64_merge_round(h64, state.v4)
+    else
+        h64 = state.seed + PRIME64_5
+    end
+
+    h64 += state.total_len
+
+    # Finalize remaining bytes
+    pos = 1
+    while pos <= state.buffer_len - 7
+        val = ifb64(state.buffer, pos)
+        h64 ⊻= xxh64_round(UInt64(0), val)
+        h64 = rotl(h64, 27) * PRIME64_1 + PRIME64_4
+        pos += 8
+    end
+
+    if pos <= state.buffer_len - 3
+        val = ifb32(state.buffer, pos)
+        h64 ⊻= UInt64(val) * PRIME64_1
+        h64 = rotl(h64, 23) * PRIME64_2 + PRIME64_3
+        pos += 4
+    end
+
+    while pos <= state.buffer_len
+        val = UInt64(state.buffer[pos])
+        h64 ⊻= val * PRIME64_5
+        h64 = rotl(h64, 11) * PRIME64_1
+        pos += 1
+    end
+
+    return xxh64_avalanche(h64)
+end
+
+function xxh64(input::AbstractVector{UInt8}, seed::UInt64 = UInt64(0))
+    state = XXH64State(seed)
+    update!(state, input)
+    return digest!(state)
+end
+
+xxh64(input::AbstractString, seed::UInt64 = UInt64(0)) = xxh64(codeunits(input), seed)
+
+export xxh3_64, xxh64, XXH64State, update!, digest!
+
 end
