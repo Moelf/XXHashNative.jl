@@ -89,7 +89,7 @@ function XXH3_64_4to8(self)
     inputLast = ifb32(input, inputLength - 4 + 1)
 
     lowerhalf, _ = lowerhigher(seed)
-    modifiedSeed = seed ⊻ UInt64(bswap(lowerhalf))
+    modifiedSeed = seed ⊻ (UInt64(bswap(lowerhalf)) << 32)
     secretWords = SVector{2, UInt64}(reinterpret(UInt64, @view secret[8+1:24]))
     combined = UInt64(inputLast) | (UInt64(inputFirst) << 32)
 
