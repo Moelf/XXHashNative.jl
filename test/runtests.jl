@@ -156,3 +156,70 @@ end
     v = collect(@view codeunits(a)[begin+4:1024+4])
     @test xxh3_64(v) == XXhash.xxh3_64(v)
 end
+
+@testset "xxh64 with seed vs XXhash" begin
+    import XXhash
+
+    inputs = [
+        "",
+        "ab",
+        "abcde",
+        "abcdefghijklm",
+        "abcdefghijklmnopqrstuvwxyz",
+        repeat("abcdefghijklmnopqrstuvwxyz", 8),
+        repeat("abcdefghijklmnopqrstuvwxyz", 64),
+        repeat("abcd", 300),
+    ]
+
+    for seed in [UInt64(1), UInt64(0xdeadbeef)], input in inputs
+        @test xxh64(input, seed) == XXhash.xxh64(input, seed)
+    end
+end
+
+@testset "xxh3_64 with seed vs XXhash" begin
+    import XXhash
+
+    # Each entry covers a distinct dispatch path in xxh3_64
+    cases = [
+        ("empty (0B)",       ""),
+        ("1to3 (2B)",        "ab"),
+        ("4to8 (5B)",        "abcde"),
+        ("9to16 (13B)",      "abcdefghijklm"),
+        ("17to128 (26B)",    "abcdefghijklmnopqrstuvwxyz"),
+        ("129to240 (208B)",  repeat("abcdefghijklmnopqrstuvwxyz", 8)),
+        ("large (1664B)",    repeat("abcdefghijklmnopqrstuvwxyz", 64)),
+    ]
+
+    seed = UInt64(0xdeadbeef)
+    for (label, input) in cases
+        @test xxh3_64(input, seed) == XXhash.xxh3_64(input, seed)
+    end
+end
+
+@testset "xxh64 streaming multi-chunk" begin
+    # Exercises the update! path where state.buffer_len > 0 on second call
+    # (the fill-buffer-then-process branch, which had zero coverage)
+
+    # Two chunks: small first (goes to buffer), then large (flushes buffer + processes blocks)
+    for (a, b) in [
+        ("hello",           repeat("x", 40)),   # 5 + 40: buffer flush at 32
+        (repeat("a", 10),   repeat("b", 50)),   # 10 + 50
+        (repeat("a", 31),   "x"),               # 31 + 1: exactly fills buffer
+        (repeat("a", 20),   repeat("b", 100)),  # 20 + 100
+    ]
+        combined = a * b
+        state = XXH64State()
+        update!(state, a)
+        update!(state, b)
+        @test digest!(state) == xxh64(combined)
+    end
+
+    # Three chunks
+    input = repeat("abcd", 300)
+    bytes = codeunits(input)
+    state = XXH64State()
+    update!(state, bytes[1:10])
+    update!(state, bytes[11:100])
+    update!(state, bytes[101:end])
+    @test digest!(state) == xxh64(input)
+end
