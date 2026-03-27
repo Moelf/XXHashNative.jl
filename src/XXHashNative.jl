@@ -89,7 +89,7 @@ function XXH3_64_4to8(self)
     inputLast = ifb32(input, inputLength - 4 + 1)
 
     lowerhalf, _ = lowerhigher(seed)
-    modifiedSeed = seed ⊻ lowerhalf
+    modifiedSeed = seed ⊻ UInt64(bswap(lowerhalf))
     secretWords = SVector{2, UInt64}(reinterpret(UInt64, @view secret[8+1:24]))
     combined = UInt64(inputLast) | (UInt64(inputFirst) << 32)
 
@@ -194,8 +194,23 @@ function round_accumulate!(acc, block, secret, N)
     return acc
 end
 
+function _initCustomSecret(secret, seed)
+    n = length(secret)
+    custom = Vector{UInt8}(undef, n)
+    nbRounds = n ÷ 16
+    for i in 0:nbRounds-1
+        lo = ifb64(secret, 16*i + 1) + seed
+        hi = ifb64(secret, 16*i + 9) - seed
+        custom_words = reinterpret(UInt64, @view custom[16*i+1:16*i+16])
+        custom_words[1] = lo
+        custom_words[2] = hi
+    end
+    return custom
+end
+
 function XXH3_64_large(self)
-    (; input, inputLength, secret) = self
+    (; input, inputLength, secret, seed) = self
+    working_secret = iszero(seed) ? secret : _initCustomSecret(secret, seed)
     acc = @MVector[
         PRIME32_3,
         PRIME64_1,
@@ -206,15 +221,15 @@ function XXH3_64_large(self)
         PRIME64_5,
         PRIME32_1,
     ]
-    secretLength = length(secret)
+    secretLength = length(working_secret)
     stripesPerBlock = (secretLength - 64) ÷ 8
     blockSize = 64 * stripesPerBlock
 
     i = 1
     # all rounds except last one
     while i <= inputLength - blockSize
-        round_accumulate!(acc, @view(input[i:i+blockSize-1]), secret, stripesPerBlock)
-        round_scramble!(acc, secret)
+        round_accumulate!(acc, @view(input[i:i+blockSize-1]), working_secret, stripesPerBlock)
+        round_scramble!(acc, working_secret)
         i += blockSize
     end
 
@@ -222,11 +237,11 @@ function XXH3_64_large(self)
     last_block = @view input[i:end]
     len = inputLength - i
     nFullStripes = (len - 1) ÷ 64
-    round_accumulate!(acc, last_block, secret, nFullStripes)
+    round_accumulate!(acc, last_block, working_secret, nFullStripes)
 
     buf_end = reinterpret(UInt64, @view input[end-63:end])
-    accumulate!(acc, buf_end, secret, secretLength - 71)
-    return finalMerge(acc, inputLength * PRIME64_1, secret, 11)
+    accumulate!(acc, buf_end, working_secret, secretLength - 71)
+    return finalMerge(acc, inputLength * PRIME64_1, working_secret, 11)
 end
 
 function finalMerge(acc, initValue, secret, secretOffset)
