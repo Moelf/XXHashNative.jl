@@ -100,3 +100,59 @@ end
     @test xxh64(a) == 0xa2779f6bd7a05689
 
 end
+
+@testset "xxh64 vs XXhash" begin
+    import XXhash
+
+    inputs = [
+        "",
+        "ab",
+        "abcde",
+        "abcdefghijklm",
+        "abcdefghijklmnopqrstuvwxyz",
+        repeat("abcdefghijklmnopqrstuvwxyz", 8),
+        repeat("abcdefghijklmnopqrstuvwxyz", 64),
+        repeat("abcd", 100),
+        repeat("abcd", 256),
+        repeat("abcd", 300),
+        repeat("abcd", 512),
+        repeat("abcd", 600),
+    ]
+
+    for input in inputs
+        @test xxh64(input) == XXhash.xxh64(input)
+    end
+
+    # view into a byte array
+    a = repeat("abcd", 300)
+    v = collect(@view codeunits(a)[begin+4:1024+4])
+    @test xxh64(v) == XXhash.xxh64(v)
+end
+
+@testset "xxh3_64 vs XXhash" begin
+    import XXhash
+
+    inputs = [
+        "",
+        "ab",
+        "abcde",
+        "abcdefghijklm",
+        "abcdefghijklmnopqrstuvwxyz",
+        repeat("abcdefghijklmnopqrstuvwxyz", 8),
+        repeat("abcdefghijklmnopqrstuvwxyz", 64),
+        repeat("abcd", 100),
+        repeat("abcd", 256),
+        repeat("abcd", 300),
+        repeat("abcd", 512),
+        repeat("abcd", 600),
+    ]
+
+    for input in inputs
+        @test xxh3_64(input) == XXhash.xxh3_64(input)
+    end
+
+    # view into a byte array
+    a = repeat("abcd", 300)
+    v = collect(@view codeunits(a)[begin+4:1024+4])
+    @test xxh3_64(v) == XXhash.xxh3_64(v)
+end
