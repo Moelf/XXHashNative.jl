@@ -223,3 +223,32 @@ end
     update!(state, bytes[101:end])
     @test digest!(state) == xxh64(input)
 end
+
+@testset "xxh64 vs Zstandard frame checksum" begin
+    # Zstandard frames store the lower 32 bits of xxh64(content) as a trailing
+    # checksum when ZSTD_c_checksumFlag is set. Validate our xxh64 agrees.
+    import ChunkCodecLibZstd: ZstdEncodeOptions
+    import ChunkCodecLibZstd.ChunkCodecCore: encode
+
+    enc = ZstdEncodeOptions(checksum=true)
+
+    inputs = [
+        "",
+        "hello world",
+        "abcde",
+        "abcdefghijklmnopqrstuvwxyz",
+        repeat("abcd", 100),
+        repeat("abcd", 256),
+        repeat("abcd", 300),
+        repeat("abcd", 512),
+        repeat("abcd", 600),
+    ]
+
+    for input in inputs
+        src = codeunits(input)
+        frame = encode(enc, src)
+        # Zstandard stores the checksum as a little-endian UInt32 in the last 4 bytes
+        zstd_checksum = reinterpret(UInt32, frame[end-3:end]) |> only
+        @test xxh64(src) % UInt32 == zstd_checksum
+    end
+end
