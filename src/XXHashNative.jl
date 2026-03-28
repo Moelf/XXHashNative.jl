@@ -33,11 +33,15 @@ const _ksecret = @SVector[
         0x45, 0xcb, 0x3a, 0x8f, 0x95, 0x16, 0x04, 0x28, 0xaf, 0xd7, 0xfb, 0xca, 0xbb, 0x4b, 0x40, 0x7e,
     ]
 
-function ifb32(bytes, offset = 0)
-    reinterpret(UInt32, @view bytes[offset:offset+3]) |> only
+@inline function ifb32(bytes::AbstractVector{UInt8}, offset = 0)
+    @inbounds UInt32(bytes[offset]) | (UInt32(bytes[offset+1]) << 8) |
+              (UInt32(bytes[offset+2]) << 16) | (UInt32(bytes[offset+3]) << 24)
 end
-function ifb64(bytes, offset = 0)
-    reinterpret(UInt64, @view bytes[offset:offset+7]) |> only
+@inline function ifb64(bytes::AbstractVector{UInt8}, offset = 0)
+    @inbounds UInt64(bytes[offset]) | (UInt64(bytes[offset+1]) << 8) |
+              (UInt64(bytes[offset+2]) << 16) | (UInt64(bytes[offset+3]) << 24) |
+              (UInt64(bytes[offset+4]) << 32) | (UInt64(bytes[offset+5]) << 40) |
+              (UInt64(bytes[offset+6]) << 48) | (UInt64(bytes[offset+7]) << 56)
 end
 
 function lowerhigher(x::UInt128)
