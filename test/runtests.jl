@@ -14,6 +14,15 @@ using XXHashNative:
     update!,
     digest!
 
+const HAS_XXHASH = try
+    @eval import XXhash
+    true
+catch err
+    @warn "Skipping XXhash comparison tests because XXhash could not be loaded." exception =
+        (err, catch_backtrace())
+    false
+end
+
 @testset "main" begin
     a = UInt8[]
     @test XXHash64(a) |> XXH3_64_empty == 0x2d06800538d394c2 == xxh3_64(a)
@@ -101,8 +110,9 @@ end
 
 end
 
+if HAS_XXHASH
+
 @testset "xxh64 vs XXhash" begin
-    import XXhash
 
     inputs = [
         "",
@@ -130,7 +140,6 @@ end
 end
 
 @testset "xxh3_64 vs XXhash" begin
-    import XXhash
 
     inputs = [
         "",
@@ -158,7 +167,6 @@ end
 end
 
 @testset "xxh64 with seed vs XXhash" begin
-    import XXhash
 
     inputs = [
         "",
@@ -177,7 +185,6 @@ end
 end
 
 @testset "xxh3_64 with seed vs XXhash" begin
-    import XXhash
 
     # Each entry covers a distinct dispatch path in xxh3_64
     cases = [
@@ -194,6 +201,8 @@ end
     for (label, input) in cases
         @test xxh3_64(input, seed) == XXhash.xxh3_64(input, seed)
     end
+end
+
 end
 
 @testset "xxh64 streaming multi-chunk" begin
