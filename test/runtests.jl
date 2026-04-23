@@ -203,7 +203,7 @@ end
     end
 end
 
-end
+end # HAS_XXHASH
 
 @testset "xxh64 streaming multi-chunk" begin
     # Exercises the update! path where state.buffer_len > 0 on second call
