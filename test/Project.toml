@@ -1,0 +1,5 @@
+[deps]
+ChunkCodecLibZstd = "55437552-ac27-4d47-9aa3-63184e8fd398"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+XXhash = "137af188-b1ec-11e9-0b40-31ed9142ae64"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"

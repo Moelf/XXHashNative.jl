@@ -33,11 +33,15 @@ const _ksecret = @SVector[
         0x45, 0xcb, 0x3a, 0x8f, 0x95, 0x16, 0x04, 0x28, 0xaf, 0xd7, 0xfb, 0xca, 0xbb, 0x4b, 0x40, 0x7e,
     ]
 
-function ifb32(bytes, offset = 0)
-    reinterpret(UInt32, @view bytes[offset:offset+3]) |> only
+@inline function ifb32(bytes::AbstractVector{UInt8}, offset = 0)
+    @inbounds UInt32(bytes[offset]) | (UInt32(bytes[offset+1]) << 8) |
+              (UInt32(bytes[offset+2]) << 16) | (UInt32(bytes[offset+3]) << 24)
 end
-function ifb64(bytes, offset = 0)
-    reinterpret(UInt64, @view bytes[offset:offset+7]) |> only
+@inline function ifb64(bytes::AbstractVector{UInt8}, offset = 0)
+    @inbounds UInt64(bytes[offset]) | (UInt64(bytes[offset+1]) << 8) |
+              (UInt64(bytes[offset+2]) << 16) | (UInt64(bytes[offset+3]) << 24) |
+              (UInt64(bytes[offset+4]) << 32) | (UInt64(bytes[offset+5]) << 40) |
+              (UInt64(bytes[offset+6]) << 48) | (UInt64(bytes[offset+7]) << 56)
 end
 
 function lowerhigher(x::UInt128)
@@ -89,7 +93,7 @@ function XXH3_64_4to8(self)
     inputLast = ifb32(input, inputLength - 4 + 1)
 
     lowerhalf, _ = lowerhigher(seed)
-    modifiedSeed = seed ⊻ lowerhalf
+    modifiedSeed = seed ⊻ (UInt64(bswap(lowerhalf)) << 32)
     secretWords = SVector{2, UInt64}(reinterpret(UInt64, @view secret[8+1:24]))
     combined = UInt64(inputLast) | (UInt64(inputFirst) << 32)
 
@@ -194,8 +198,23 @@ function round_accumulate!(acc, block, secret, N)
     return acc
 end
 
+function _initCustomSecret(secret, seed)
+    n = length(secret)
+    custom = Vector{UInt8}(undef, n)
+    nbRounds = n ÷ 16
+    for i in 0:nbRounds-1
+        lo = ifb64(secret, 16*i + 1) + seed
+        hi = ifb64(secret, 16*i + 9) - seed
+        custom_words = reinterpret(UInt64, @view custom[16*i+1:16*i+16])
+        custom_words[1] = lo
+        custom_words[2] = hi
+    end
+    return custom
+end
+
 function XXH3_64_large(self)
-    (; input, inputLength, secret) = self
+    (; input, inputLength, secret, seed) = self
+    working_secret = iszero(seed) ? secret : _initCustomSecret(secret, seed)
     acc = @MVector[
         PRIME32_3,
         PRIME64_1,
@@ -206,15 +225,15 @@ function XXH3_64_large(self)
         PRIME64_5,
         PRIME32_1,
     ]
-    secretLength = length(secret)
+    secretLength = length(working_secret)
     stripesPerBlock = (secretLength - 64) ÷ 8
     blockSize = 64 * stripesPerBlock
 
     i = 1
     # all rounds except last one
     while i <= inputLength - blockSize
-        round_accumulate!(acc, @view(input[i:i+blockSize-1]), secret, stripesPerBlock)
-        round_scramble!(acc, secret)
+        round_accumulate!(acc, @view(input[i:i+blockSize-1]), working_secret, stripesPerBlock)
+        round_scramble!(acc, working_secret)
         i += blockSize
     end
 
@@ -222,11 +241,11 @@ function XXH3_64_large(self)
     last_block = @view input[i:end]
     len = inputLength - i
     nFullStripes = (len - 1) ÷ 64
-    round_accumulate!(acc, last_block, secret, nFullStripes)
+    round_accumulate!(acc, last_block, working_secret, nFullStripes)
 
     buf_end = reinterpret(UInt64, @view input[end-63:end])
-    accumulate!(acc, buf_end, secret, secretLength - 71)
-    return finalMerge(acc, inputLength * PRIME64_1, secret, 11)
+    accumulate!(acc, buf_end, working_secret, secretLength - 71)
+    return finalMerge(acc, inputLength * PRIME64_1, working_secret, 11)
 end
 
 function finalMerge(acc, initValue, secret, secretOffset)
@@ -279,5 +298,150 @@ end
 
 xxh3_64(input::AbstractString, seed = UInt64(0), secret = _ksecret) =
     xxh3_64(codeunits(input), seed, secret)
+
+# XXH64 implementation
+
+function rotl(x::UInt64, r::Int)
+    return (x << r) | (x >> (64 - r))
+end
+
+function xxh64_round(acc::UInt64, input::UInt64)
+    acc += input * PRIME64_2
+    acc = rotl(acc, 31)
+    acc *= PRIME64_1
+    return acc
+end
+
+function xxh64_merge_round(acc::UInt64, val::UInt64)
+    val = xxh64_round(UInt64(0), val)
+    acc ⊻= val
+    acc = acc * PRIME64_1 + PRIME64_4
+    return acc
+end
+
+function xxh64_avalanche(h64::UInt64)
+    h64 ⊻= h64 >> 33
+    h64 *= PRIME64_2
+    h64 ⊻= h64 >> 29
+    h64 *= PRIME64_3
+    h64 ⊻= h64 >> 32
+    return h64
+end
+
+mutable struct XXH64State
+    v1::UInt64
+    v2::UInt64
+    v3::UInt64
+    v4::UInt64
+    total_len::UInt64
+    buffer::Vector{UInt8}
+    buffer_len::Int
+    seed::UInt64
+end
+
+function XXH64State(seed::UInt64 = UInt64(0))
+    v1 = seed + PRIME64_1 + PRIME64_2
+    v2 = seed + PRIME64_2
+    v3 = seed
+    v4 = seed - PRIME64_1
+    return XXH64State(v1, v2, v3, v4, 0, zeros(UInt8, 32), 0, seed)
+end
+
+function update!(state::XXH64State, input::AbstractVector{UInt8})
+    input_len = length(input)
+    state.total_len += input_len
+    input_pos = 1
+
+    if state.buffer_len + input_len < 32
+        # Fill buffer and return
+        copyto!(state.buffer, state.buffer_len + 1, input, 1, input_len)
+        state.buffer_len += input_len
+        return state
+    end
+
+    # Fill remaining buffer to 32 bytes
+    if state.buffer_len > 0
+        fill_len = 32 - state.buffer_len
+        copyto!(state.buffer, state.buffer_len + 1, input, 1, fill_len)
+
+        state.v1 = xxh64_round(state.v1, ifb64(state.buffer, 1))
+        state.v2 = xxh64_round(state.v2, ifb64(state.buffer, 9))
+        state.v3 = xxh64_round(state.v3, ifb64(state.buffer, 17))
+        state.v4 = xxh64_round(state.v4, ifb64(state.buffer, 25))
+
+        input_pos += fill_len
+        state.buffer_len = 0
+    end
+
+    # Process 32-byte blocks
+    while input_pos <= input_len - 31
+        state.v1 = xxh64_round(state.v1, ifb64(input, input_pos))
+        state.v2 = xxh64_round(state.v2, ifb64(input, input_pos + 8))
+        state.v3 = xxh64_round(state.v3, ifb64(input, input_pos + 16))
+        state.v4 = xxh64_round(state.v4, ifb64(input, input_pos + 24))
+        input_pos += 32
+    end
+
+    # Buffer remaining data
+    rem_len = input_len - input_pos + 1
+    if rem_len > 0
+        copyto!(state.buffer, 1, input, input_pos, rem_len)
+        state.buffer_len = rem_len
+    end
+
+    return state
+end
+
+update!(state::XXH64State, input::AbstractString) = update!(state, codeunits(input))
+
+function digest!(state::XXH64State)
+    h64 = UInt64(0)
+    if state.total_len >= 32
+        h64 = rotl(state.v1, 1) + rotl(state.v2, 7) + rotl(state.v3, 12) + rotl(state.v4, 18)
+        h64 = xxh64_merge_round(h64, state.v1)
+        h64 = xxh64_merge_round(h64, state.v2)
+        h64 = xxh64_merge_round(h64, state.v3)
+        h64 = xxh64_merge_round(h64, state.v4)
+    else
+        h64 = state.seed + PRIME64_5
+    end
+
+    h64 += state.total_len
+
+    # Finalize remaining bytes
+    pos = 1
+    while pos <= state.buffer_len - 7
+        val = ifb64(state.buffer, pos)
+        h64 ⊻= xxh64_round(UInt64(0), val)
+        h64 = rotl(h64, 27) * PRIME64_1 + PRIME64_4
+        pos += 8
+    end
+
+    if pos <= state.buffer_len - 3
+        val = ifb32(state.buffer, pos)
+        h64 ⊻= UInt64(val) * PRIME64_1
+        h64 = rotl(h64, 23) * PRIME64_2 + PRIME64_3
+        pos += 4
+    end
+
+    while pos <= state.buffer_len
+        val = UInt64(state.buffer[pos])
+        h64 ⊻= val * PRIME64_5
+        h64 = rotl(h64, 11) * PRIME64_1
+        pos += 1
+    end
+
+    return xxh64_avalanche(h64)
+end
+
+function xxh64(input::AbstractVector{UInt8}, seed::UInt64 = UInt64(0))
+    state = XXH64State(seed)
+    update!(state, input)
+    return digest!(state)
+end
+
+xxh64(input::AbstractString, seed::UInt64 = UInt64(0)) = xxh64(codeunits(input), seed)
+
+export xxh3_64, xxh64, XXH64State, update!, digest!
 
 end
