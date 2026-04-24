@@ -13,7 +13,7 @@ one-shot hashing is supported. And see the following table for the supported
 algorithms:
 
 - [ ] XXH32
-- [ ] XXH64
+- [x] XXH64
 - [x] XXH3_64
 - [ ] XXH3_128
 
