@@ -237,9 +237,12 @@ function XXH3_64_large(self)
         i += blockSize
     end
 
-    # last round
+    # last round: `i` is the 1-based index of the first byte of the last
+    # (partial) block, so `inputLength - i + 1` bytes remain; the reference
+    # implementation processes `(remaining - 1) ÷ 64` full stripes here, the
+    # final 64 bytes of the input are handled separately below
     last_block = @view input[i:end]
-    len = inputLength - i
+    len = inputLength - i + 1
     nFullStripes = (len - 1) ÷ 64
     round_accumulate!(acc, last_block, working_secret, nFullStripes)
 
