@@ -58,6 +58,14 @@ end
     a = repeat("abcd", 600)
     @test xxh3_64(a) == 0x816af0d37c98071f
 
+    # inputs whose length is 1 mod 64 (above 240 bytes) used to drop the last
+    # full stripe of the final block; reference values from python-xxhash
+    pat(n) = UInt8[(i * 7 + 3) % 256 for i in 0:n-1]
+    @test xxh3_64(pat(257)) == 0x2a300c3495738ea6
+    @test xxh3_64(pat(321)) == 0xee7f43d2b915e28a
+    @test xxh3_64(pat(1089)) == 0x2a90437fe231e7e8
+    @test xxh3_64(pat(1217)) == 0xc3fc77e17665e62e
+    @test xxh3_64(pat(2049)) == 0x55aed42c9f1554b6
 end
 
 @testset "xxh64" begin
