@@ -303,6 +303,19 @@ xxh3_64(input::AbstractString, seed = UInt64(0), secret = _ksecret) =
     xxh3_64(codeunits(input), seed, secret)
 
 # XXH64 implementation
+#
+# Performance notes:
+# - The four accumulators live in local variables (registers) for the whole
+#   stripe loop and are written back to `XXH64State` once per `update!`.
+# - Contiguous inputs (`Vector{UInt8}`, `codeunits(::String)`, `String`, and
+#   contiguous views of these) are read with unaligned 8-byte loads through a
+#   pointer; other `AbstractVector{UInt8}`s use indexed byte loads.
+# - XXH64's four lanes are serial multiply/rotate chains, so 4-wide SIMD does
+#   not help: vector 64-bit multiplies (`vpmullq`) have much higher latency
+#   than scalar `imul`, and a loop packed into one vector runs about half as
+#   fast. LLVM's SLP vectorizer performs that packing on its own in some
+#   contexts, so each lane passes through `_opaque`, an empty inline-assembly
+#   barrier that emits no instructions but keeps the loop scalar.
 
 function rotl(x::UInt64, r::Int)
     return (x << r) | (x >> (64 - r))
@@ -331,6 +344,92 @@ function xxh64_avalanche(h64::UInt64)
     return h64
 end
 
+# Identity function the optimizer cannot see through (no instructions emitted).
+@inline _opaque(x::UInt64) = Base.llvmcall("""
+    %2 = call i64 asm "", "=r,0"(i64 %0)
+    ret i64 %2""", UInt64, Tuple{UInt64}, x)
+
+# Byte sources: a raw pointer, or any AbstractVector (with its first index).
+# Offsets `i` are 0-based.
+struct _PtrSrc
+    p::Ptr{UInt8}
+end
+struct _VecSrc{V<:AbstractVector{UInt8}}
+    v::V
+    base::Int
+end
+@inline _ld64(s::_PtrSrc, i::Int) = ltoh(unsafe_load(Ptr{UInt64}(s.p + i)))
+@inline _ld32(s::_PtrSrc, i::Int) = ltoh(unsafe_load(Ptr{UInt32}(s.p + i)))
+@inline _ld8(s::_PtrSrc, i::Int) = unsafe_load(s.p + i)
+@inline _ld64(s::_VecSrc, i::Int) = ifb64(s.v, s.base + i)
+@inline _ld32(s::_VecSrc, i::Int) = ifb32(s.v, s.base + i)
+@inline _ld8(s::_VecSrc, i::Int) = @inbounds s.v[s.base + i]
+
+# Process all whole 32-byte stripes of bytes [off, off+n) of `src`.
+@inline function _xxh64_stripes(src, off::Int, n::Int, v1::UInt64, v2::UInt64, v3::UInt64, v4::UInt64)
+    i = off
+    stop = off + n
+    while i + 32 <= stop
+        v1 = _opaque(xxh64_round(v1, _ld64(src, i)))
+        v2 = _opaque(xxh64_round(v2, _ld64(src, i + 8)))
+        v3 = _opaque(xxh64_round(v3, _ld64(src, i + 16)))
+        v4 = _opaque(xxh64_round(v4, _ld64(src, i + 24)))
+        i += 32
+    end
+    return v1, v2, v3, v4, i - off
+end
+
+# Hash the remaining (< 32) bytes [off, off+n) into h64 and avalanche.
+@inline function _xxh64_finish(h64::UInt64, src, off::Int, n::Int)
+    i = off
+    stop = off + n
+    while i + 8 <= stop
+        h64 ⊻= xxh64_round(UInt64(0), _ld64(src, i))
+        h64 = rotl(h64, 27) * PRIME64_1 + PRIME64_4
+        i += 8
+    end
+    if i + 4 <= stop
+        h64 ⊻= UInt64(_ld32(src, i)) * PRIME64_1
+        h64 = rotl(h64, 23) * PRIME64_2 + PRIME64_3
+        i += 4
+    end
+    while i < stop
+        h64 ⊻= UInt64(_ld8(src, i)) * PRIME64_5
+        h64 = rotl(h64, 11) * PRIME64_1
+        i += 1
+    end
+    return xxh64_avalanche(h64)
+end
+
+@inline _xxh64_converge(v1, v2, v3, v4) =
+    xxh64_merge_round(xxh64_merge_round(xxh64_merge_round(xxh64_merge_round(
+        rotl(v1, 1) + rotl(v2, 7) + rotl(v3, 12) + rotl(v4, 18), v1), v2), v3), v4)
+
+function _xxh64(src, n::Int, seed::UInt64)
+    if n >= 32
+        v1, v2, v3, v4, i = _xxh64_stripes(src, 0, n, seed + PRIME64_1 + PRIME64_2,
+                                           seed + PRIME64_2, seed, seed - PRIME64_1)
+        h64 = _xxh64_converge(v1, v2, v3, v4)
+    else
+        h64 = seed + PRIME64_5
+        i = 0
+    end
+    return _xxh64_finish(h64 + UInt64(n), src, i, n - i)
+end
+
+# Inputs whose bytes can be read through a pointer.
+const _ContiguousBytes = Union{Vector{UInt8}, Base.CodeUnits{UInt8,String},
+                               Base.FastContiguousSubArray{UInt8,1,Vector{UInt8}},
+                               Base.FastContiguousSubArray{UInt8,1,Base.CodeUnits{UInt8,String}}}
+
+# Run f(src, n) on a byte source for `input` (pointer when contiguous).
+@inline function _with_source(f, input::AbstractVector{UInt8})
+    if input isa _ContiguousBytes
+        return GC.@preserve input f(_PtrSrc(pointer(input)), length(input))
+    end
+    return f(_VecSrc(input, firstindex(input)), length(input))
+end
+
 mutable struct XXH64State
     v1::UInt64
     v2::UInt64
@@ -350,98 +449,72 @@ function XXH64State(seed::UInt64 = UInt64(0))
     return XXH64State(v1, v2, v3, v4, 0, zeros(UInt8, 32), 0, seed)
 end
 
-function update!(state::XXH64State, input::AbstractVector{UInt8})
-    input_len = length(input)
-    state.total_len += input_len
-    input_pos = 1
-
-    if state.buffer_len + input_len < 32
-        # Fill buffer and return
-        copyto!(state.buffer, state.buffer_len + 1, input, 1, input_len)
-        state.buffer_len += input_len
-        return state
-    end
-
-    # Fill remaining buffer to 32 bytes
-    if state.buffer_len > 0
-        fill_len = 32 - state.buffer_len
-        copyto!(state.buffer, state.buffer_len + 1, input, 1, fill_len)
-
-        state.v1 = xxh64_round(state.v1, ifb64(state.buffer, 1))
-        state.v2 = xxh64_round(state.v2, ifb64(state.buffer, 9))
-        state.v3 = xxh64_round(state.v3, ifb64(state.buffer, 17))
-        state.v4 = xxh64_round(state.v4, ifb64(state.buffer, 25))
-
-        input_pos += fill_len
-        state.buffer_len = 0
-    end
-
-    # Process 32-byte blocks
-    while input_pos <= input_len - 31
-        state.v1 = xxh64_round(state.v1, ifb64(input, input_pos))
-        state.v2 = xxh64_round(state.v2, ifb64(input, input_pos + 8))
-        state.v3 = xxh64_round(state.v3, ifb64(input, input_pos + 16))
-        state.v4 = xxh64_round(state.v4, ifb64(input, input_pos + 24))
-        input_pos += 32
-    end
-
-    # Buffer remaining data
-    rem_len = input_len - input_pos + 1
-    if rem_len > 0
-        copyto!(state.buffer, 1, input, input_pos, rem_len)
+function _update!(state::XXH64State, src, n::Int)
+    state.total_len += n
+    buf = state.buffer
+    off = 0
+    GC.@preserve buf begin
+        bsrc = _PtrSrc(pointer(buf))
+        if state.buffer_len + n < 32
+            for k in 0:n-1
+                @inbounds buf[state.buffer_len + k + 1] = _ld8(src, k)
+            end
+            state.buffer_len += n
+            return state
+        end
+        v1, v2, v3, v4 = state.v1, state.v2, state.v3, state.v4
+        if state.buffer_len > 0
+            fill_len = 32 - state.buffer_len
+            for k in 0:fill_len-1
+                @inbounds buf[state.buffer_len + k + 1] = _ld8(src, k)
+            end
+            v1, v2, v3, v4, _ = _xxh64_stripes(bsrc, 0, 32, v1, v2, v3, v4)
+            off = fill_len
+            state.buffer_len = 0
+        end
+        v1, v2, v3, v4, done = _xxh64_stripes(src, off, n - off, v1, v2, v3, v4)
+        state.v1 = v1; state.v2 = v2; state.v3 = v3; state.v4 = v4
+        off += done
+        rem_len = n - off
+        for k in 0:rem_len-1
+            @inbounds buf[k + 1] = _ld8(src, off + k)
+        end
         state.buffer_len = rem_len
     end
-
     return state
 end
 
+"""
+    update!(state::XXH64State, input) -> state
+
+Feed `input` (an `AbstractVector{UInt8}` or `AbstractString`) into the
+streaming XXH64 `state`.
+"""
+update!(state::XXH64State, input::AbstractVector{UInt8}) =
+    _with_source((src, n) -> _update!(state, src, n), input)
+
 update!(state::XXH64State, input::AbstractString) = update!(state, codeunits(input))
 
+"""
+    digest!(state::XXH64State) -> UInt64
+
+XXH64 hash of all data fed to `state` so far. `state` is not modified, so more
+data may be added afterwards.
+"""
 function digest!(state::XXH64State)
-    h64 = UInt64(0)
-    if state.total_len >= 32
-        h64 = rotl(state.v1, 1) + rotl(state.v2, 7) + rotl(state.v3, 12) + rotl(state.v4, 18)
-        h64 = xxh64_merge_round(h64, state.v1)
-        h64 = xxh64_merge_round(h64, state.v2)
-        h64 = xxh64_merge_round(h64, state.v3)
-        h64 = xxh64_merge_round(h64, state.v4)
-    else
-        h64 = state.seed + PRIME64_5
-    end
-
-    h64 += state.total_len
-
-    # Finalize remaining bytes
-    pos = 1
-    while pos <= state.buffer_len - 7
-        val = ifb64(state.buffer, pos)
-        h64 ⊻= xxh64_round(UInt64(0), val)
-        h64 = rotl(h64, 27) * PRIME64_1 + PRIME64_4
-        pos += 8
-    end
-
-    if pos <= state.buffer_len - 3
-        val = ifb32(state.buffer, pos)
-        h64 ⊻= UInt64(val) * PRIME64_1
-        h64 = rotl(h64, 23) * PRIME64_2 + PRIME64_3
-        pos += 4
-    end
-
-    while pos <= state.buffer_len
-        val = UInt64(state.buffer[pos])
-        h64 ⊻= val * PRIME64_5
-        h64 = rotl(h64, 11) * PRIME64_1
-        pos += 1
-    end
-
-    return xxh64_avalanche(h64)
+    h64 = state.total_len >= 32 ?
+        _xxh64_converge(state.v1, state.v2, state.v3, state.v4) : state.seed + PRIME64_5
+    buf = state.buffer
+    return GC.@preserve buf _xxh64_finish(h64 + state.total_len, _PtrSrc(pointer(buf)), 0, state.buffer_len)
 end
 
-function xxh64(input::AbstractVector{UInt8}, seed::UInt64 = UInt64(0))
-    state = XXH64State(seed)
-    update!(state, input)
-    return digest!(state)
-end
+"""
+    xxh64(input, seed = UInt64(0)) -> UInt64
+
+One-shot XXH64 hash of `input` (an `AbstractVector{UInt8}` or `AbstractString`).
+"""
+xxh64(input::AbstractVector{UInt8}, seed::UInt64 = UInt64(0)) =
+    _with_source((src, n) -> _xxh64(src, n, seed), input)
 
 xxh64(input::AbstractString, seed::UInt64 = UInt64(0)) = xxh64(codeunits(input), seed)
 
