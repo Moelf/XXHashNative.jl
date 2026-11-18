@@ -422,13 +422,13 @@ const _ContiguousBytes = Union{Vector{UInt8}, Base.CodeUnits{UInt8,String},
                                Base.FastContiguousSubArray{UInt8,1,Vector{UInt8}},
                                Base.FastContiguousSubArray{UInt8,1,Base.CodeUnits{UInt8,String}}}
 
-# Run f(src, n) on a byte source for `input` (pointer when contiguous).
-@inline function _with_source(f, input::AbstractVector{UInt8})
-    if input isa _ContiguousBytes
-        return GC.@preserve input f(_PtrSrc(pointer(input)), length(input))
-    end
-    return f(_VecSrc(input, firstindex(input)), length(input))
-end
+# Run f(src, n) on a byte source for `input`: a pointer for contiguous
+# memory, indexed loads otherwise. Add a `_with_source` method to opt another
+# contiguous byte container into the pointer path.
+@inline _with_source(f, input::_ContiguousBytes) =
+    GC.@preserve input f(_PtrSrc(pointer(input)), length(input))
+@inline _with_source(f, input::AbstractVector{UInt8}) =
+    f(_VecSrc(input, firstindex(input)), length(input))
 
 mutable struct XXH64State
     v1::UInt64
