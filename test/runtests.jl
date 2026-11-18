@@ -269,3 +269,58 @@ end
         @test xxh64(src) % UInt32 == zstd_checksum
     end
 end
+
+# A minimal AbstractVector with offset indices (exercises the generic,
+# non-pointer path with firstindex != 1).
+struct OffsetBytes <: AbstractVector{UInt8}
+    data::Vector{UInt8}
+end
+Base.size(v::OffsetBytes) = size(v.data)
+Base.axes(v::OffsetBytes) = (0:length(v.data)-1,)
+Base.getindex(v::OffsetBytes, i::Int) = v.data[i + 1]
+Base.IndexStyle(::Type{OffsetBytes}) = IndexLinear()
+
+@testset "xxh64 input types and streaming splits" begin
+    pat(n) = UInt8[(i * 31 + (i >> 5) + 7) % 256 for i in 0:n-1]
+    for n in vcat(0:130, [255, 256, 257, 1000, 4096, 10_007])
+        x = pat(n)
+        ref = xxh64(x)
+        HAS_XXHASH && @test ref == XXhash.xxh64(x)
+        # Full 64-bit seeds. XXhash.xxh64(data, seed) truncates the seed to
+        # 32 bits (`seed % UInt32`), so call the C function directly.
+        seed = UInt64(n) * 0x9E3779B97F4A7C15
+        if HAS_XXHASH
+            c = GC.@preserve x XXhash.libxxhash.XXH64(pointer(x), length(x), seed)
+            @test xxh64(x, seed) == c
+        end
+        # streaming with uneven pieces
+        for step in (1, 7, 31, 32, 33, 100)
+            st = XXH64State()
+            i = 1
+            while i <= n
+                k = min(step, n - i + 1)
+                update!(st, view(x, i:i+k-1))
+                i += k
+            end
+            @test digest!(st) == ref
+        end
+        # non-contiguous and non-Vector inputs give the same hash as a copy
+        @test xxh64(view(x, n:-1:1)) == xxh64(reverse(x))
+        @test xxh64(view(x, 1:2:n)) == xxh64(x[1:2:n])
+        @test xxh64(OffsetBytes(x)) == ref
+        s = String(copy(x))
+        @test xxh64(s) == ref
+        @test xxh64(codeunits(s)) == ref
+        n > 4 && @test xxh64(view(codeunits(s), 3:n-2)) == xxh64(x[3:n-2])
+    end
+    # SubString and AbstractString inputs
+    s = "The quick brown fox jumps over the lazy dog, repeatedly. " ^ 5
+    @test xxh64(SubString(s, 5, 200)) == xxh64(Vector{UInt8}(s[5:200]))
+    # digest! does not modify the state
+    st = XXH64State(UInt64(7))
+    update!(st, "hello ")
+    h1 = digest!(st)
+    @test digest!(st) == h1 == xxh64("hello ", UInt64(7))
+    update!(st, "world, this is a longer message for the state")
+    @test digest!(st) == xxh64("hello world, this is a longer message for the state", UInt64(7))
+end
